@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.venv/
+models/*
+!models/README.md
+*.mp4
+*.avi
+*.pt
+.DS_Store
+.openai/

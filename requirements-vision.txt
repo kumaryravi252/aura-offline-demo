@@ -1,0 +1,4 @@
+# Optional. Install while online before taking the demo offline.
+# Core simulator has no pip dependencies.
+ultralytics>=8.3,<9
+opencv-python>=4.10,<5

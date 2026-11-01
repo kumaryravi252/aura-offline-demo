@@ -1,0 +1,45 @@
+'use strict';
+const $=id=>document.getElementById(id);
+let paused=false,busy=false,state=null,health=null,frameImage=new Image(),lastFrame='',lastOK=0;
+const colors={human:'#67dbf5',animal:'#e7b66b',auto:'#b5a0ff',bike:'#b5a0ff',bus:'#8baca0',thela:'#a4bb8b',vehicle:'#8baca0'};
+async function api(path,body){const r=await fetch(path,{method:body?'POST':'GET',headers:body?{'Content-Type':'application/json'}:{},body:body?JSON.stringify(body):undefined,signal:AbortSignal.timeout(15000)});const data=await r.json();if(!r.ok)throw new Error(data.error||'Request failed');return data}
+function options(){return{dt:.1,horizon:Number($('horizon').value),multiplier:Number($('uncertainty').value),memory:$('memory').checked}}
+function showError(e){$('error').hidden=false;$('error').textContent=e.message;$('connection').textContent='Local engine unavailable';document.querySelector('.status').classList.add('offline');$('action').textContent='NO LIVE DATA';$('decisionBox').className='decision stop';$('reason').textContent='Paused or stale output must not be interpreted as a current decision.'}
+async function tick(force=false){if(busy||paused&&!force)return;busy=true;try{state=await api('/api/step',options());lastOK=Date.now();$('error').hidden=true;$('connection').textContent='Local engine connected';document.querySelector('.status').classList.remove('offline');render()}catch(e){paused=true;$('pause').textContent='▶ Resume';showError(e)}finally{busy=false}}
+function line(ctx,points,color,dash=[]){if(!points.length)return;ctx.beginPath();ctx.strokeStyle=color;ctx.lineWidth=2;ctx.setLineDash(dash);points.forEach((p,i)=>i?ctx.lineTo(p[0],p[1]):ctx.moveTo(p[0],p[1]));ctx.stroke();ctx.setLineDash([])}
+function drawScene(){const c=$('scene'),ctx=c.getContext('2d'),w=c.width,h=c.height;ctx.clearRect(0,0,w,h);
+ if(state.mode==='vision'){if(lastFrame!==state.frame){lastFrame=state.frame;frameImage.onload=()=>drawScene();frameImage.src=state.frame}if(frameImage.complete&&frameImage.naturalWidth)ctx.drawImage(frameImage,0,0,w,h);state.boxes.forEach(b=>{const[x1,y1,x2,y2]=b.xyxy;ctx.strokeStyle=colors[b.kind];ctx.lineWidth=2;ctx.strokeRect(x1*w,y1*h,(x2-x1)*w,(y2-y1)*h);ctx.fillStyle='#071418';ctx.fillRect(x1*w,y1*h-23,160,23);ctx.fillStyle=colors[b.kind];ctx.font='12px monospace';ctx.fillText(`${b.label} ${Math.round(b.confidence*100)}%`,x1*w+5,y1*h-7)});return}
+ ctx.fillStyle='#121e22';ctx.fillRect(0,0,w,h);
+ const xy=(x,y)=>[w/2+x*37,h-50-y*14];
+ // Unmarked road and fixed, known simulator corridor.
+ ctx.fillStyle='#1a2a2e';ctx.fillRect(w/2-state.corridor*37,15,state.corridor*74,h-15);
+ for(const x of [-state.corridor,state.corridor])line(ctx,[xy(x,0),xy(x,35)],'#4b5c55');
+ ctx.font='10px monospace';ctx.fillStyle='#587078';for(let y=5;y<=30;y+=5){const p=xy(-6.8,y);ctx.fillText(`${y} m`,p[0],p[1]);line(ctx,[xy(-5,y),xy(5,y)],'#26383d',[2,8])}
+ for(let i=0;i<8;i++){let y=(i*81+state.time*8)%h;ctx.fillStyle='#21322c';ctx.beginPath();ctx.arc(85,y,22,0,Math.PI*2);ctx.fill();ctx.beginPath();ctx.arc(w-67,y+25,18,0,Math.PI*2);ctx.fill()}
+ line(ctx,[[...xy(0,3)],...state.path.map(p=>xy(p.x,p.y))],'#74e2b8',[6,6]);
+ for(const t of state.tracks){if(t.missed&&!$('memory').checked)continue;const color=colors[t.kind];const future=t.future.at(-1),[fx,fy]=xy(future.x,future.y);
+ ctx.save();ctx.globalAlpha=t.missed?.13:.11;ctx.fillStyle=color;ctx.beginPath();ctx.ellipse(fx,fy,Math.min(240,future.sigma*37),Math.min(180,future.sigma*18),0,0,Math.PI*2);ctx.fill();ctx.restore();
+ ctx.strokeStyle=color;ctx.globalAlpha=.45;ctx.setLineDash([4,5]);ctx.beginPath();ctx.ellipse(fx,fy,Math.min(240,future.sigma*37),Math.min(180,future.sigma*18),0,0,Math.PI*2);ctx.stroke();ctx.globalAlpha=1;ctx.setLineDash([]);
+ line(ctx,t.future.map(p=>xy(p.x,p.y)),color,[5,5]);const[x,y]=xy(t.x,t.y);ctx.save();ctx.translate(x,y);ctx.globalAlpha=t.missed?.45:1;ctx.fillStyle=color;ctx.strokeStyle=color;ctx.lineWidth=1.5;
+ if(t.kind==='human'){ctx.beginPath();ctx.arc(0,-8,6,0,Math.PI*2);ctx.fill();line(ctx,[[0,-1],[0,13]],color);line(ctx,[[-9,4],[0,0],[9,4]],color);line(ctx,[[-7,22],[0,13],[7,22]],color)}else if(t.kind==='animal'){ctx.fillRect(-16,-9,30,18);ctx.fillRect(10,-17,10,12);for(const dx of [-12,10])ctx.fillRect(dx,8,4,8)}else{const big=t.kind==='bus';ctx.fillRect(big?-17:-12,big?-31:-19,big?34:24,big?62:38);ctx.fillStyle='#20363d';ctx.fillRect(big?-12:-8,big?-24:-14,big?24:16,8);ctx.fillRect(big?-12:-8,big?16:7,big?24:16,7)}
+ ctx.fillStyle='#0a171c';ctx.fillRect(-37,-52,100,20);ctx.fillStyle=color;ctx.font='11px monospace';ctx.fillText(`#${String(t.id).padStart(2,'0')} ${t.kind}`, -33,-38);ctx.restore()}
+ const[eX,eY]=xy(0,3);ctx.fillStyle='#74e2b8';ctx.beginPath();ctx.roundRect(eX-15,eY-24,30,48,7);ctx.fill();ctx.fillStyle='#173d34';ctx.fillRect(eX-10,eY-16,20,10);ctx.font='10px monospace';ctx.fillStyle='#a6e7cf';ctx.fillText('EGO',eX-10,eY+39);
+}
+function drawGrid(){const c=$('grid'),ctx=c.getContext('2d');ctx.clearRect(0,0,c.width,c.height);const x0=47,y0=12,cw=18,ch=10;ctx.font='9px monospace';
+ state.grid.forEach((row,r)=>row.forEach((v,col)=>{const x=-7.5+col;ctx.fillStyle=Math.abs(x)>state.corridor?'#152127':`rgb(${Math.round(23+v*207)},${Math.round(61+v*40)},${Math.round(61+v*28)})`;ctx.fillRect(x0+col*cw,y0+(29-r)*ch,cw-2,ch-1)}));
+ const xy=(x,y)=>[x0+(x+8)*cw,y0+(30-y)*ch];
+ state.candidates.forEach(p=>line(ctx,p.points.map(p=>xy(p.x,p.y)),'#74948b44'));
+ line(ctx,[[...xy(0,3)],...state.path.map(p=>xy(p.x,p.y))],'#8cffe0');
+ state.tracks.filter(t=>!t.missed||$('memory').checked).forEach(t=>{const[x,y]=xy(t.x,t.y);ctx.fillStyle=colors[t.kind];ctx.beginPath();ctx.arc(x,y,3,0,Math.PI*2);ctx.fill()});
+ const[x,y]=xy(0,3);ctx.fillStyle='#defdf1';ctx.fillRect(x-4,y-5,8,10);ctx.fillStyle='#8b9fa7';for(let r=0;r<=30;r+=10)ctx.fillText(`${r}`,24,y0+(30-r)*ch+4);ctx.fillText(state.mode==='vision'?'IMAGE-SPACE / NOT METRIC':'FORWARD DISTANCE / METERS',x0,340);
+}
+function render(){drawScene();drawGrid();$('clock').textContent=state.time.toFixed(1)+' s';$('horizonTag').textContent=state.horizon.toFixed(1)+' s';$('mode').textContent=state.mode==='vision'?'LOCAL VISION':'SIMULATION';$('sourceCaption').textContent=state.mode==='vision'?'LOCAL MODEL DETECTIONS':'SYNTHETIC ROAD SCENE';$('speed').textContent=state.mode==='vision'?'N/A':(state.speed*3.6).toFixed(1);$('speedUnit').textContent=state.mode==='vision'?'UNCALIBRATED':'SIMULATED';$('risk').textContent=Math.round(state.risk*100);$('count').textContent=state.tracks.length;$('ghosts').textContent=state.tracks.filter(t=>t.missed>0).length+' occluded';$('latency').textContent=state.latency_ms.toFixed(1);$('action').textContent=state.action;$('reason').textContent=state.reason;$('decisionBox').className='decision '+state.action.toLowerCase();$('sourceNote').textContent=state.source_note;
+ $('tracks').replaceChildren();for(const t of state.tracks){const tr=document.createElement('tr');const values=[`#${String(t.id).padStart(2,'0')} / ${t.kind}`,t.behavior,Math.hypot(t.vx,t.vy).toFixed(2),t.envelope.toFixed(2),t.missed?`${t.missed.toFixed(1)} s hidden`:`${Math.round(t.confidence*100)}% observed`];values.forEach((v,i)=>{const td=document.createElement('td');td.textContent=v;if(i===0)td.style.color=colors[t.kind];tr.append(td)});$('tracks').append(tr)}if(!state.tracks.length){const tr=document.createElement('tr'),td=document.createElement('td');td.colSpan=5;td.textContent='No objects observed in the current scene.';tr.append(td);$('tracks').append(tr)}}
+async function reset(){if(busy)return;busy=true;try{await api('/api/reset',{scenario:$('scenario').value});$('scenarioDescription').textContent=health.scenarios[$('scenario').value][1]}catch(e){showError(e)}finally{busy=false}await tick(true)}
+$('scenario').onchange=reset;$('reset').onclick=reset;$('pause').onclick=()=>{paused=!paused;$('pause').textContent=paused?'▶ Resume':'Ⅱ Pause'};$('step').onclick=()=>{paused=true;$('pause').textContent='▶ Resume';tick(true)};
+// Re-evaluate controls on the next frame; while paused, use Step to preserve simulation time.
+for(const [id,out,suffix] of [['horizon','horizonValue',' s'],['uncertainty','uncertaintyValue','×']])$(id).oninput=()=>{$(out).textContent=Number($(id).value).toFixed(1)+suffix};
+$('memory').onchange=()=>{if(state){drawScene();drawGrid()}if(paused)tick(true)};
+$('guide').onclick=()=>$('guideDialog').showModal();$('closeGuide').onclick=()=>$('guideDialog').close();
+$('export').onclick=async()=>{try{const data=await api('/api/export');const url=URL.createObjectURL(new Blob([JSON.stringify(data,null,2)],{type:'application/json'}));const a=document.createElement('a');a.href=url;a.download='aura-run.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000)}catch(e){showError(e)}};
+(async()=>{try{health=await api('/api/health');if(health.vision){$('scenario').disabled=true;$('reset').disabled=true;$('scenarioDescription').textContent='Local camera/video inference · see README for calibration limits.'}await tick();setInterval(()=>tick(),100)}catch(e){showError(e)}})();
